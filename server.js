@@ -39,6 +39,7 @@ app.use('/api/student', require('./src/routes/student'));
 app.use('/api/vigyaan', require('./src/routes/vigyaan'));
 app.use('/api/slots', require('./src/routes/slots'));
 app.use('/api/admin/students', require('./src/routes/adminStudents'));
+app.use('/api/ai', require('./src/routes/ai'));
 
 // Error handlers (always last)
 app.use(notFound);
