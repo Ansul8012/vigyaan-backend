@@ -362,16 +362,16 @@ const completeIssue = async (req, res, next) => {
 
     // Add to student issued books record
     student.issuedBooks.push({
-      bookId: book._id,
-      bookTitle: book.title,
-      bookAuthor: book.author,
-      bookEmoji: book.emoji,
-      bookShelf: book.shelf,
-      bookIsbn: book.isbn,
-      issuedAt: new Date(),
-      dueDate,
-      status: 'issued',
-    });
+  _id: book._id,
+  title: book.title,
+  author: book.author,
+  emoji: book.emoji,
+  shelf: book.shelf,
+  isbn: book.isbn,
+  issuedAt: new Date(),
+  dueDate,
+  status: 'issued',
+});
     await student.save();
 
     // Mark request as fulfilled

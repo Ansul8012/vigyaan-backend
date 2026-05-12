@@ -4,7 +4,6 @@ const Student = require('../models/Student');
 
 // ─── RAISE ISSUE REQUEST (Student only) ──────────────────────────────────────
 // POST /api/requests/issue
-// Student sees a book in library and raises issue request
 const raiseIssueRequest = async (req, res, next) => {
   try {
     const { bookId } = req.body;
@@ -17,8 +16,8 @@ const raiseIssueRequest = async (req, res, next) => {
       });
     }
 
-    // Find book
     const book = await Book.findById(bookId);
+
     if (!book) {
       return res.status(404).json({
         success: false,
@@ -26,7 +25,6 @@ const raiseIssueRequest = async (req, res, next) => {
       });
     }
 
-    // Check if book is available
     if (book.availableCopies <= 0) {
       return res.status(400).json({
         success: false,
@@ -34,13 +32,13 @@ const raiseIssueRequest = async (req, res, next) => {
       });
     }
 
-    // Check if student already has a pending issue request for this book
     const existingPendingRequest = await Request.findOne({
       studentId: student._id,
       bookId: book._id,
       type: 'issue',
       status: 'pending',
     });
+
     if (existingPendingRequest) {
       return res.status(409).json({
         success: false,
@@ -48,12 +46,13 @@ const raiseIssueRequest = async (req, res, next) => {
       });
     }
 
-    // Check if student already has this book issued
     const alreadyIssued = student.issuedBooks.find(
       (b) =>
+        b.bookId &&
         b.bookId.toString() === book._id.toString() &&
         (b.status === 'issued' || b.status === 'overdue')
     );
+
     if (alreadyIssued) {
       return res.status(409).json({
         success: false,
@@ -61,10 +60,12 @@ const raiseIssueRequest = async (req, res, next) => {
       });
     }
 
-    // Check student issued book limit (max 3 books at a time)
     const currentlyIssued = student.issuedBooks.filter(
-      (b) => b.status === 'issued' || b.status === 'overdue'
+      (b) =>
+        b.bookId &&
+        (b.status === 'issued' || b.status === 'overdue')
     );
+
     if (currentlyIssued.length >= 3) {
       return res.status(400).json({
         success: false,
@@ -72,7 +73,6 @@ const raiseIssueRequest = async (req, res, next) => {
       });
     }
 
-    // Create request
     const request = await Request.create({
       type: 'issue',
       status: 'pending',
@@ -89,7 +89,8 @@ const raiseIssueRequest = async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      message: 'Issue request raised successfully. Visit the library to collect your book.',
+      message:
+        'Issue request raised successfully. Visit the library to collect your book.',
       request,
     });
   } catch (error) {
@@ -99,7 +100,6 @@ const raiseIssueRequest = async (req, res, next) => {
 
 // ─── RAISE RETURN REQUEST (Student only) ─────────────────────────────────────
 // POST /api/requests/return
-// Student raises return request from their dashboard
 const raiseReturnRequest = async (req, res, next) => {
   try {
     const { bookId } = req.body;
@@ -112,8 +112,8 @@ const raiseReturnRequest = async (req, res, next) => {
       });
     }
 
-    // Check book exists
     const book = await Book.findById(bookId);
+
     if (!book) {
       return res.status(404).json({
         success: false,
@@ -121,12 +121,13 @@ const raiseReturnRequest = async (req, res, next) => {
       });
     }
 
-    // Check student actually has this book issued
     const issuedEntry = student.issuedBooks.find(
       (b) =>
+        b.bookId &&
         b.bookId.toString() === book._id.toString() &&
         (b.status === 'issued' || b.status === 'overdue')
     );
+
     if (!issuedEntry) {
       return res.status(400).json({
         success: false,
@@ -134,13 +135,13 @@ const raiseReturnRequest = async (req, res, next) => {
       });
     }
 
-    // Check no pending return request already exists
     const existingReturn = await Request.findOne({
       studentId: student._id,
       bookId: book._id,
       type: 'return',
       status: 'pending',
     });
+
     if (existingReturn) {
       return res.status(409).json({
         success: false,
@@ -164,7 +165,8 @@ const raiseReturnRequest = async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      message: 'Return request raised. Visit the library to return your book.',
+      message:
+        'Return request raised. Visit the library to return your book.',
       request,
     });
   } catch (error) {
@@ -172,9 +174,7 @@ const raiseReturnRequest = async (req, res, next) => {
   }
 };
 
-// ─── GET MY REQUESTS (Student only) ──────────────────────────────────────────
-// GET /api/requests/mine
-// Student sees all their own requests
+// ─── GET MY REQUESTS ──────────────────────────────────────────────────────────
 const getMyRequests = async (req, res, next) => {
   try {
     const requests = await Request.find({
@@ -191,9 +191,7 @@ const getMyRequests = async (req, res, next) => {
   }
 };
 
-// ─── GET ALL REQUESTS (Admin only) ───────────────────────────────────────────
-// GET /api/requests?status=pending&type=issue
-// Admin sees all requests, filterable by status and type
+// ─── GET ALL REQUESTS ─────────────────────────────────────────────────────────
 const getAllRequests = async (req, res, next) => {
   try {
     const filter = {};
@@ -201,11 +199,14 @@ const getAllRequests = async (req, res, next) => {
     if (req.query.status) {
       filter.status = req.query.status;
     }
+
     if (req.query.type) {
       filter.type = req.query.type;
     }
 
-    const requests = await Request.find(filter).sort({ createdAt: -1 });
+    const requests = await Request.find(filter).sort({
+      createdAt: -1,
+    });
 
     return res.status(200).json({
       success: true,
@@ -217,9 +218,7 @@ const getAllRequests = async (req, res, next) => {
   }
 };
 
-// ─── CANCEL REQUEST (Student only) ───────────────────────────────────────────
-// DELETE /api/requests/:id
-// Student can cancel their own pending request
+// ─── CANCEL REQUEST ───────────────────────────────────────────────────────────
 const cancelRequest = async (req, res, next) => {
   try {
     const request = await Request.findById(req.params.id);
@@ -231,15 +230,15 @@ const cancelRequest = async (req, res, next) => {
       });
     }
 
-    // Make sure this request belongs to this student
-    if (request.studentId.toString() !== req.user._id.toString()) {
+    if (
+      request.studentId.toString() !== req.user._id.toString()
+    ) {
       return res.status(403).json({
         success: false,
         message: 'You can only cancel your own requests',
       });
     }
 
-    // Can only cancel pending requests
     if (request.status !== 'pending') {
       return res.status(400).json({
         success: false,
@@ -248,6 +247,7 @@ const cancelRequest = async (req, res, next) => {
     }
 
     request.status = 'cancelled';
+
     await request.save();
 
     return res.status(200).json({
@@ -260,10 +260,7 @@ const cancelRequest = async (req, res, next) => {
   }
 };
 
-// ─── FULFILL REQUEST (Admin only via Vigyaan) ─────────────────────────────────
-// POST /api/requests/:id/fulfill
-// Called after Vigyaan kiosk completes QR verifications
-// For issue: book is physically given, for return: book is taken back
+// ─── FULFILL REQUEST ──────────────────────────────────────────────────────────
 const fulfillRequest = async (req, res, next) => {
   try {
     const request = await Request.findById(req.params.id);
@@ -283,6 +280,7 @@ const fulfillRequest = async (req, res, next) => {
     }
 
     const book = await Book.findById(request.bookId);
+
     if (!book) {
       return res.status(404).json({
         success: false,
@@ -291,6 +289,7 @@ const fulfillRequest = async (req, res, next) => {
     }
 
     const student = await Student.findById(request.studentId);
+
     if (!student) {
       return res.status(404).json({
         success: false,
@@ -298,7 +297,7 @@ const fulfillRequest = async (req, res, next) => {
       });
     }
 
-    // ── ISSUE FULFILLMENT ──
+    // ── ISSUE ─────────────────────────────────────────────
     if (request.type === 'issue') {
       const { months } = req.body;
 
@@ -316,15 +315,16 @@ const fulfillRequest = async (req, res, next) => {
         });
       }
 
-      // Calculate due date
       const dueDate = new Date();
-      dueDate.setMonth(dueDate.getMonth() + Number(months));
 
-      // Decrease available copies
+      dueDate.setMonth(
+        dueDate.getMonth() + Number(months)
+      );
+
       book.availableCopies -= 1;
+
       await book.save();
 
-      // Add to student issued books
       student.issuedBooks.push({
         bookId: book._id,
         bookTitle: book.title,
@@ -336,14 +336,15 @@ const fulfillRequest = async (req, res, next) => {
         dueDate,
         status: 'issued',
       });
+
       await student.save();
 
-      // Mark request fulfilled
       request.status = 'fulfilled';
       request.issuedMonths = Number(months);
       request.dueDate = dueDate;
       request.processedBy = req.user._id;
       request.processedAt = new Date();
+
       await request.save();
 
       return res.status(200).json({
@@ -354,11 +355,11 @@ const fulfillRequest = async (req, res, next) => {
       });
     }
 
-    // ── RETURN FULFILLMENT ──
+    // ── RETURN ────────────────────────────────────────────
     if (request.type === 'return') {
-      // Find the issued book entry in student's record
       const issuedIndex = student.issuedBooks.findIndex(
         (b) =>
+          b.bookId &&
           b.bookId.toString() === book._id.toString() &&
           (b.status === 'issued' || b.status === 'overdue')
       );
@@ -366,22 +367,24 @@ const fulfillRequest = async (req, res, next) => {
       if (issuedIndex === -1) {
         return res.status(400).json({
           success: false,
-          message: 'No issued record found for this student and book',
+          message:
+            'No issued record found for this student and book',
         });
       }
 
-      // Mark as returned in student record
-      student.issuedBooks[issuedIndex].status = 'returned';
+      student.issuedBooks[issuedIndex].status =
+        'returned';
+
       await student.save();
 
-      // Increase available copies
       book.availableCopies += 1;
+
       await book.save();
 
-      // Mark request fulfilled
       request.status = 'fulfilled';
       request.processedBy = req.user._id;
       request.processedAt = new Date();
+
       await request.save();
 
       return res.status(200).json({
@@ -395,15 +398,13 @@ const fulfillRequest = async (req, res, next) => {
   }
 };
 
-// ─── GET STUDENT ISSUED BOOKS ─────────────────────────────────────────────────
-// GET /api/student/issued-books
-// Student dashboard — shows all books currently issued + overdue
+// ─── GET MY ISSUED BOOKS ──────────────────────────────────────────────────────
 const getMyIssuedBooks = async (req, res, next) => {
   try {
     const student = await Student.findById(req.user._id);
 
-    // Check and update overdue status
     const now = new Date();
+
     let updated = false;
 
     student.issuedBooks.forEach((book) => {
@@ -417,11 +418,14 @@ const getMyIssuedBooks = async (req, res, next) => {
       }
     });
 
-    if (updated) await student.save();
+    if (updated) {
+      await student.save();
+    }
 
-    // Return only active books (not returned)
     const activeBooks = student.issuedBooks.filter(
-      (b) => b.status === 'issued' || b.status === 'overdue'
+      (b) =>
+        b.bookId &&
+        (b.status === 'issued' || b.status === 'overdue')
     );
 
     return res.status(200).json({

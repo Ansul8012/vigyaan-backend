@@ -1,97 +1,129 @@
 const Slot = require('../models/Slot');
 
-// ─── HELPER: Generate today and tomorrow's slots ──────────────────────────────
-const generateSlotsForDate = async (dateStr) => {
-  const timeLabels = [
-    '9:00 AM – 10:00 AM',
-    '10:00 AM – 11:00 AM',
-    '11:00 AM – 12:00 PM',
-    '12:00 PM – 1:00 PM',
-    '1:00 PM – 2:00 PM',
-    '2:00 PM – 3:00 PM',
-    '3:00 PM – 4:00 PM',
-    '4:00 PM – 5:00 PM',
-    '5:00 PM – 6:00 PM',
-    '6:00 PM – 7:00 PM',
-    '7:00 PM – 8:00 PM',
-  ];
+const timeLabels = [
+  '9:00 AM – 10:00 AM',
+  '10:00 AM – 11:00 AM',
+  '11:00 AM – 12:00 PM',
+  '12:00 PM – 1:00 PM',
+  '1:00 PM – 2:00 PM',
+  '2:00 PM – 3:00 PM',
+  '3:00 PM – 4:00 PM',
+  '4:00 PM – 5:00 PM',
+  '5:00 PM – 6:00 PM',
+  '6:00 PM – 7:00 PM',
+  '7:00 PM – 8:00 PM',
+];
 
-  for (let i = 0; i < timeLabels.length; i++) {
-    const startHour = 9 + i;
-    // insertOne only if not already exists (unique index handles duplicates)
-    await Slot.findOneAndUpdate(
-      { date: dateStr, startHour },
-      {
-        $setOnInsert: {
-          date: dateStr,
-          startHour,
-          time: timeLabels[i],
-          total: 30,
-          booked: 0,
-          bookedBy: [],
+const getDateStr = (date) => {
+  return date.toISOString().split('T')[0];
+};
+
+// ─────────────────────────────────────────────────────────────
+// Generate slots efficiently
+// ─────────────────────────────────────────────────────────────
+const generateSlotsForDate = async (dateStr) => {
+  await Promise.all(
+    timeLabels.map((time, i) => {
+      const startHour = 9 + i;
+
+      return Slot.findOneAndUpdate(
+        { date: dateStr, startHour },
+        {
+          $setOnInsert: {
+            date: dateStr,
+            startHour,
+            time,
+            total: 30,
+            booked: 0,
+            bookedBy: [],
+          },
         },
-      },
-      { upsert: true, new: true }
-    );
+        {
+          upsert: true,
+          returnDocument: 'after',
+        }
+      );
+    })
+  );
+};
+
+// ─────────────────────────────────────────────────────────────
+// Sync slots
+// ─────────────────────────────────────────────────────────────
+let isSyncing = false;
+let lastSyncTime = 0;
+
+const syncSlots = async () => {
+  try {
+    const now = Date.now();
+
+    // Prevent multiple sync calls within 1 minute
+    if (isSyncing || now - lastSyncTime < 60000) {
+      return;
+    }
+
+    isSyncing = true;
+
+    const currentDate = new Date();
+    const currentHour = currentDate.getHours();
+
+    const today = getDateStr(currentDate);
+
+    const tomorrowDate = new Date(currentDate);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+
+    const tomorrow = getDateStr(tomorrowDate);
+
+    await Promise.all([
+      generateSlotsForDate(today),
+      generateSlotsForDate(tomorrow),
+    ]);
+
+    await Slot.deleteMany({
+      $or: [
+        { date: { $lt: today } },
+        {
+          date: today,
+          startHour: { $lt: currentHour },
+        },
+      ],
+    });
+
+    lastSyncTime = Date.now();
+  } finally {
+    isSyncing = false;
   }
 };
 
-// ─── HELPER: Get date string YYYY-MM-DD ───────────────────────────────────────
-const getDateStr = (date) => date.toISOString().split('T')[0];
-
-// ─── HELPER: Auto-create today + tomorrow, delete expired past slots ──────────
-const syncSlots = async () => {
-  const now = new Date();
-  const currentHour = now.getHours(); // 0-23
-
-  // Today and tomorrow date strings
-  const today = getDateStr(now);
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = getDateStr(tomorrow);
-
-  // Generate slots for today and tomorrow
-  await generateSlotsForDate(today);
-  await generateSlotsForDate(tomorrowStr);
-
-  // Delete past slots:
-  // - All slots from dates BEFORE today
-  // - Today's slots where startHour < currentHour (slot already finished)
-  await Slot.deleteMany({
-    $or: [
-      { date: { $lt: today } },
-      {
-        date: today,
-        startHour: { $lt: currentHour },
-      },
-    ],
-  });
-};
-
-// ─── GET ALL AVAILABLE SLOTS ──────────────────────────────────────────────────
-// GET /api/slots
-// Returns today + tomorrow slots (auto-sync happens here)
+// ─────────────────────────────────────────────────────────────
+// GET ALL SLOTS
+// ─────────────────────────────────────────────────────────────
 const getSlots = async (req, res, next) => {
   try {
     await syncSlots();
 
     const now = new Date();
+
     const today = getDateStr(now);
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = getDateStr(tomorrow);
+
+    const tomorrowDate = new Date(now);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+
+    const tomorrow = getDateStr(tomorrowDate);
 
     const slots = await Slot.find({
-      date: { $in: [today, tomorrowStr] },
-    }).sort({ date: 1, startHour: 1 });
+      date: { $in: [today, tomorrow] },
+    })
+      .sort({ date: 1, startHour: 1 })
+      .lean();
 
-    // Mark which slot this student has booked (if student)
-    const studentId = req.user._id;
+    const studentId = req.user?._id?.toString();
 
     const enriched = slots.map((slot) => {
       const isBookedByMe = slot.bookedBy.some(
-        (b) => b.studentId.toString() === studentId.toString()
+        (b) => b.studentId.toString() === studentId
       );
+
       return {
         _id: slot._id,
         date: slot.date,
@@ -105,19 +137,15 @@ const getSlots = async (req, res, next) => {
       };
     });
 
-    // Split by day
-    const todaySlots = enriched.filter((s) => s.date === today);
-    const tomorrowSlots = enriched.filter((s) => s.date === tomorrowStr);
-
     return res.status(200).json({
       success: true,
       today: {
         date: today,
-        slots: todaySlots,
+        slots: enriched.filter((s) => s.date === today),
       },
       tomorrow: {
-        date: tomorrowStr,
-        slots: tomorrowSlots,
+        date: tomorrow,
+        slots: enriched.filter((s) => s.date === tomorrow),
       },
     });
   } catch (error) {
@@ -125,9 +153,9 @@ const getSlots = async (req, res, next) => {
   }
 };
 
-// ─── BOOK A SLOT ──────────────────────────────────────────────────────────────
-// POST /api/slots/book
-// Body: { slotId }
+// ─────────────────────────────────────────────────────────────
+// BOOK SLOT
+// ─────────────────────────────────────────────────────────────
 const bookSlot = async (req, res, next) => {
   try {
     const { slotId } = req.body;
@@ -143,26 +171,25 @@ const bookSlot = async (req, res, next) => {
     await syncSlots();
 
     const slot = await Slot.findById(slotId);
+
     if (!slot) {
       return res.status(404).json({
         success: false,
-        message: 'Slot not found or has already expired',
+        message: 'Slot not found',
       });
     }
 
-    // Check slot is not in the past
     const now = new Date();
     const currentHour = now.getHours();
     const today = getDateStr(now);
 
-    if (slot.date === today && slot.startHour <= currentHour) {
+    if (slot.date === today && slot.startHour < currentHour) {
       return res.status(400).json({
         success: false,
-        message: 'This slot has already started or passed',
+        message: 'Slot already expired',
       });
     }
 
-    // Check student hasn't already booked a slot on this same date
     const existingBooking = await Slot.findOne({
       date: slot.date,
       'bookedBy.studentId': student._id,
@@ -171,36 +198,34 @@ const bookSlot = async (req, res, next) => {
     if (existingBooking) {
       return res.status(409).json({
         success: false,
-        message: `You already have a slot booked on ${slot.date} at ${existingBooking.time}`,
+        message: `Already booked at ${existingBooking.time}`,
       });
     }
 
-    // Check slot is not full
     if (slot.booked >= slot.total) {
       return res.status(400).json({
         success: false,
-        message: 'This slot is full. Please choose another time.',
+        message: 'Slot is full',
       });
     }
 
-    // Book the slot
     slot.bookedBy.push({
       studentId: student._id,
       studentName: student.fullName,
       bookedAt: new Date(),
     });
+
     slot.booked += 1;
+
     await slot.save();
 
     return res.status(200).json({
       success: true,
-      message: `Slot booked successfully!`,
+      message: 'Slot booked successfully',
       booking: {
+        slotId: slot._id,
         date: slot.date,
         time: slot.time,
-        studentName: student.fullName,
-        studentId: student.studentId,
-        slotId: slot._id,
       },
     });
   } catch (error) {
@@ -208,9 +233,9 @@ const bookSlot = async (req, res, next) => {
   }
 };
 
-// ─── CANCEL A SLOT ────────────────────────────────────────────────────────────
-// POST /api/slots/cancel
-// Body: { slotId }
+// ─────────────────────────────────────────────────────────────
+// CANCEL SLOT
+// ─────────────────────────────────────────────────────────────
 const cancelSlot = async (req, res, next) => {
   try {
     const { slotId } = req.body;
@@ -224,26 +249,25 @@ const cancelSlot = async (req, res, next) => {
     }
 
     const slot = await Slot.findById(slotId);
+
     if (!slot) {
       return res.status(404).json({
         success: false,
-        message: 'Slot not found or has already expired',
+        message: 'Slot not found',
       });
     }
 
-    // Check slot hasn't started yet
     const now = new Date();
     const currentHour = now.getHours();
     const today = getDateStr(now);
 
-    if (slot.date === today && slot.startHour <= currentHour) {
+    if (slot.date === today && slot.startHour < currentHour) {
       return res.status(400).json({
         success: false,
-        message: 'Cannot cancel a slot that has already started or passed',
+        message: 'Cannot cancel expired slot',
       });
     }
 
-    // Check student actually booked this slot
     const bookingIndex = slot.bookedBy.findIndex(
       (b) => b.studentId.toString() === student._id.toString()
     );
@@ -251,45 +275,44 @@ const cancelSlot = async (req, res, next) => {
     if (bookingIndex === -1) {
       return res.status(400).json({
         success: false,
-        message: 'You have not booked this slot',
+        message: 'Booking not found',
       });
     }
 
-    // Remove booking
     slot.bookedBy.splice(bookingIndex, 1);
+
     slot.booked = Math.max(slot.booked - 1, 0);
+
     await slot.save();
 
     return res.status(200).json({
       success: true,
-      message: `Slot cancelled successfully`,
-      cancelled: {
-        date: slot.date,
-        time: slot.time,
-        studentName: student.fullName,
-      },
+      message: 'Slot cancelled successfully',
     });
   } catch (error) {
     next(error);
   }
 };
 
-// ─── GET MY BOOKINGS ──────────────────────────────────────────────────────────
-// GET /api/slots/mine
-// Student sees their upcoming booked slots
+// ─────────────────────────────────────────────────────────────
+// GET MY BOOKINGS
+// ─────────────────────────────────────────────────────────────
 const getMyBookings = async (req, res, next) => {
   try {
     await syncSlots();
 
     const student = req.user;
+
     const today = getDateStr(new Date());
 
-    const mySlots = await Slot.find({
+    const slots = await Slot.find({
       date: { $gte: today },
       'bookedBy.studentId': student._id,
-    }).sort({ date: 1, startHour: 1 });
+    })
+      .sort({ date: 1, startHour: 1 })
+      .lean();
 
-    const result = mySlots.map((slot) => ({
+    const bookings = slots.map((slot) => ({
       slotId: slot._id,
       date: slot.date,
       time: slot.time,
@@ -298,25 +321,28 @@ const getMyBookings = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      count: result.length,
-      bookings: result,
+      count: bookings.length,
+      bookings,
     });
   } catch (error) {
     next(error);
   }
 };
 
-// ─── ADMIN: GET ALL BOOKINGS FOR A DATE ───────────────────────────────────────
-// GET /api/slots/admin?date=2025-01-15
-// Admin sees all slots and who booked them on a given date
+// ─────────────────────────────────────────────────────────────
+// ADMIN SLOT VIEW
+// ─────────────────────────────────────────────────────────────
 const getAdminSlotView = async (req, res, next) => {
   try {
     await syncSlots();
 
-    const { date } = req.query;
-    const targetDate = date || getDateStr(new Date());
+    const targetDate = req.query.date || getDateStr(new Date());
 
-    const slots = await Slot.find({ date: targetDate }).sort({ startHour: 1 });
+    const slots = await Slot.find({
+      date: targetDate,
+    })
+      .sort({ startHour: 1 })
+      .lean();
 
     const result = slots.map((slot) => ({
       slotId: slot._id,
